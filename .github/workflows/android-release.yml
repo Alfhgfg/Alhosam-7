@@ -170,7 +170,27 @@ jobs:
           BUILD_TOOLS_DIR=$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)
           echo "Using build-tools at: $BUILD_TOOLS_DIR"
 
-          "$BUILD_TOOLS_DIR/apksigner" verify --verbose --print-certs "$APK_PATH"
+          "$BUILD_TOOLS_DIR/apksigner" verify --verbose --print-certs "$APK_PATH" | tee /tmp/apksigner.txt
+
+          APK_CERT_SHA1=$(grep -m1 "Signer #1 certificate SHA-1 digest:" /tmp/apksigner.txt | awk '{print toupper($NF)}' | sed 's/../&:/g;s/:$//' || true)
+          APK_CERT_SHA256=$(grep -m1 "Signer #1 certificate SHA-256 digest:" /tmp/apksigner.txt | awk '{print toupper($NF)}' | sed 's/../&:/g;s/:$//' || true)
+          echo "APK_CERT_SHA1=$APK_CERT_SHA1" >> "$GITHUB_ENV"
+          echo "APK_CERT_SHA256=$APK_CERT_SHA256" >> "$GITHUB_ENV"
+
+          if [ -s android/app/google-services.json ]; then
+            node -e '
+              const fs = require("fs");
+              const gs = JSON.parse(fs.readFileSync("android/app/google-services.json", "utf8"));
+              const projectId = gs?.project_info?.project_id || "";
+              const client = (gs?.client || []).find(c => c?.client_info?.android_client_info?.package_name === "com.alhussam.grocery");
+              const oauthClients = client?.oauth_client || [];
+              const hasAndroidOAuth = oauthClients.some(o => o.client_type === 1);
+              const hasWebOAuth = oauthClients.some(o => o.client_type === 3);
+              console.log("google-services.json project_id:", projectId, "matched package:", Boolean(client), "hasAndroidOAuth:", hasAndroidOAuth, "hasWebOAuth:", hasWebOAuth);
+              if (!client) throw new Error("google-services.json missing package com.alhussam.grocery");
+              if (!hasWebOAuth) throw new Error("google-services.json missing Web OAuth client (client_type 3)");
+            '
+          fi
 
           "$BUILD_TOOLS_DIR/aapt2" dump badging "$APK_PATH" > /tmp/badging.txt
           head -n 10 /tmp/badging.txt
@@ -223,6 +243,9 @@ jobs:
             echo ""
             echo "- **Package Name:** \`com.alhussam.grocery\`"
             echo "- **Version Name:** \`71.0.0\` (\`versionCode: 1\`)"
+            echo "- **APK Signing SHA-1:** \`${APK_CERT_SHA1:-N/A}\`"
+            echo "- **APK Signing SHA-256:** \`${APK_CERT_SHA256:-N/A}\`"
+            echo "- **google-services.json present:** \`$([ -s android/app/google-services.json ] && echo true || echo false)\`"
             echo "- **APK Size:** \`${APK_SIZE}\` bytes"
             echo "- **AAB Size:** \`${AAB_SIZE}\` bytes"
             echo "- **Run & Artifacts URL:** ${RUN_URL}"
